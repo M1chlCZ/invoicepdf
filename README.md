@@ -9,7 +9,7 @@ Render invoices and credit notes as PDF bytes. The package uses embedded fonts a
 - Credit notes support negative amounts, an original-document reference, and a correction reason.
 - Czech and English output. The Czech locale uses `Faktura`, `Kč`, comma decimals with non-breaking-space grouping, and `02.01.2006` dates. The English locale uses `Invoice`, `1,234.56`, and `02 Jan 2006`.
 - Amounts use minor units as `int64`. Money formatting uses integer arithmetic only.
-- An optional logo and an optional color palette.
+- An optional logo, an optional color palette, and an optional payment QR image.
 - The paid or unpaid banner and the "not a VAT payer" note are part of the layout.
 
 ## Install
@@ -70,6 +70,7 @@ if err != nil {
 | `Reason` | The correction reason. Credit notes only. |
 | `Paid` | Shows the paid banner and the settled total label. A credit note always uses the settled label and has no banner. |
 | `Logo` | Optional PNG or JPEG bytes. The header keeps a 3:1 ratio. |
+| `PaymentQR` | Optional payment QR (`PaymentQR{PNG, Label}`). |
 | `Palette` | Optional color override. |
 
 ## Credit notes
@@ -100,6 +101,27 @@ document.Palette = &invoicepdf.Palette{
 	White:   invoicepdf.Color{R: 0xFF, G: 0xFF, B: 0xFF},
 }
 ```
+
+## Payment QR
+
+`PaymentQR` embeds a payment QR PNG next to the totals and prints its label
+under the image. The caller generates the PNG; the package only places it.
+Generate one with [qrplatba](https://github.com/m1chlcz/qrplatba):
+
+```
+qrplatba --iban CZ6508000000192000145399 --amount 2560.00 --vs 20260042 \
+  --message "Faktura 2026-0042" --output qr.png
+```
+
+```go
+document.PaymentQR = &invoicepdf.PaymentQR{
+	PNG:   qrPNG,
+	Label: "QR Platba",
+}
+```
+
+The image renders 96 points wide. An empty `Label` draws no caption. `Render`
+returns an error when `PNG` is empty or not a valid PNG.
 
 ## Development
 

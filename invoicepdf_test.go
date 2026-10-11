@@ -2,11 +2,16 @@ package invoicepdf_test
 
 import (
 	"bytes"
+	"compress/zlib"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -195,6 +200,212 @@ func TestRenderRejectsInvalidLogo(t *testing.T) {
 
 	if _, err := invoicepdf.Render(document); err == nil {
 		t.Fatalf("Render(invalid logo) succeeded, want error")
+	}
+}
+
+func sampleInvoice() invoicepdf.Document {
+	return invoicepdf.Document{
+		Number:        "2026-0021",
+		Kind:          invoicepdf.KindInvoice,
+		IssuedDate:    "2026-09-19",
+		Locale:        "cs-CZ",
+		Currency:      "CZK",
+		SellerName:    "Sample Goods s.r.o.",
+		SellerAddress: "Dlouhá 12\n110 00 Praha 1",
+		BuyerName:     "Jan Novák",
+		BuyerAddress:  "Krátká 3\n602 00 Brno",
+		Lines: []invoicepdf.Line{{
+			Name:           "Kožená taška",
+			Quantity:       1,
+			UnitPriceMinor: 249000,
+			TotalMinor:     249000,
+		}},
+		ItemsMinor: 249000,
+		TotalMinor: 249000,
+	}
+}
+
+func sampleQRPNG(t *testing.T, size int) []byte {
+	t.Helper()
+	img := image.NewGray(image.Rect(0, 0, size, size))
+	for y := range size {
+		for x := range size {
+			dark := (x+y)%2 == 0 || x < 2 || y < 2 || x >= size-2 || y >= size-2
+			if dark {
+				img.SetGray(x, y, color.Gray{Y: 0})
+				continue
+			}
+			img.SetGray(x, y, color.Gray{Y: 255})
+		}
+	}
+	var buffer bytes.Buffer
+	if err := png.Encode(&buffer, img); err != nil {
+		t.Fatalf("encode payment qr: %v", err)
+	}
+	return buffer.Bytes()
+}
+
+// inflateDrawStreams returns the decoded page content that carries image draw
+// operators. It ignores compressed font and image streams.
+func inflateDrawStreams(t *testing.T, data []byte) string {
+	t.Helper()
+	var decoded strings.Builder
+	for {
+		start := bytes.Index(data, []byte("stream\n"))
+		if start < 0 {
+			break
+		}
+		data = data[start+len("stream\n"):]
+		end := bytes.Index(data, []byte("\nendstream"))
+		if end < 0 {
+			break
+		}
+		raw := data[:end]
+		data = data[end+len("\nendstream"):]
+		reader, err := zlib.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			continue
+		}
+		content, readErr := io.ReadAll(reader)
+		reader.Close()
+		if readErr != nil || !bytes.Contains(content, []byte(" cm /I")) {
+			continue
+		}
+		decoded.Write(content)
+		decoded.WriteByte('\n')
+	}
+	return decoded.String()
+}
+
+var cmapEntryPattern = regexp.MustCompile(`<[0-9A-F]{4,6}><[0-9A-F]{4,6}><([0-9A-F]{4,6})>`)
+
+// cmapCodePoints returns the Unicode code points of every character in the
+// embedded font maps. Tests assert rendered text through these code points.
+func cmapCodePoints(t *testing.T, data []byte) map[rune]bool {
+	t.Helper()
+	points := make(map[rune]bool)
+	for _, match := range cmapEntryPattern.FindAllSubmatch(data, -1) {
+		value, err := strconv.ParseUint(string(match[1]), 16, 32)
+		if err != nil {
+			t.Fatalf("parse font map code point %q: %v", match[1], err)
+		}
+		points[rune(value)] = true
+	}
+	return points
+}
+
+func TestRenderPaymentQRImageAndLabel(t *testing.T) {
+	t.Parallel()
+	document := sampleInvoice()
+	document.PaymentQR = &invoicepdf.PaymentQR{
+		PNG:   sampleQRPNG(t, 21),
+		Label: "QR Platba",
+	}
+
+	data, err := invoicepdf.Render(document)
+	if err != nil {
+		t.Fatalf("Render(payment qr): %v", err)
+	}
+	if !bytes.HasPrefix(data, []byte("%PDF")) {
+		t.Fatalf("rendered bytes are not a PDF")
+	}
+	if count := bytes.Count(data, []byte("/Subtype /Image")); count != 1 {
+		t.Fatalf("expected one payment qr image object, found %d", count)
+	}
+	if !bytes.Contains(data, []byte("/Width 21\n")) {
+		t.Fatalf("embedded payment qr image has unexpected dimensions")
+	}
+	content := inflateDrawStreams(t, data)
+	if !strings.Contains(content, "96.00 0 0") {
+		t.Fatalf("payment qr is not drawn at the default width")
+	}
+	if draws := strings.Count(content, " Do "); draws != 1 {
+		t.Fatalf("expected one payment qr draw operator, found %d", draws)
+	}
+	points := cmapCodePoints(t, data)
+	for _, r := range "QR" {
+		if !points[r] {
+			t.Fatalf("payment qr label rune %q missing from the rendered font map", r)
+		}
+	}
+
+	withoutLabel := sampleInvoice()
+	withoutLabel.PaymentQR = &invoicepdf.PaymentQR{PNG: sampleQRPNG(t, 21)}
+	plain, err := invoicepdf.Render(withoutLabel)
+	if err != nil {
+		t.Fatalf("Render(payment qr without label): %v", err)
+	}
+	if cmapCodePoints(t, plain)['Q'] {
+		t.Fatalf("label rune %q rendered without a label", 'Q')
+	}
+}
+
+func TestRenderRejectsInvalidPaymentQR(t *testing.T) {
+	t.Parallel()
+	document := sampleInvoice()
+	document.PaymentQR = &invoicepdf.PaymentQR{PNG: []byte("not a png")}
+
+	_, err := invoicepdf.Render(document)
+	if err == nil {
+		t.Fatalf("Render(invalid payment qr) succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "payment qr") || !strings.Contains(err.Error(), "invalid png") {
+		t.Fatalf("Render(invalid payment qr) error = %q, want a descriptive png error", err)
+	}
+
+	empty := sampleInvoice()
+	empty.PaymentQR = &invoicepdf.PaymentQR{}
+	if _, err = invoicepdf.Render(empty); err == nil {
+		t.Fatalf("Render(empty payment qr) succeeded, want error")
+	}
+}
+
+func TestRenderPaymentQRCoexistsWithLogo(t *testing.T) {
+	t.Parallel()
+	var logo bytes.Buffer
+	if err := png.Encode(&logo, image.NewGray(image.Rect(0, 0, 30, 10))); err != nil {
+		t.Fatalf("encode logo: %v", err)
+	}
+	document := sampleInvoice()
+	document.Logo = logo.Bytes()
+	document.PaymentQR = &invoicepdf.PaymentQR{
+		PNG:   sampleQRPNG(t, 21),
+		Label: "QR Platba",
+	}
+
+	data, err := invoicepdf.Render(document)
+	if err != nil {
+		t.Fatalf("Render(logo and payment qr): %v", err)
+	}
+	if count := bytes.Count(data, []byte("/Subtype /Image")); count != 2 {
+		t.Fatalf("expected logo and payment qr image objects, found %d", count)
+	}
+	if !bytes.Contains(data, []byte("/Width 30\n")) || !bytes.Contains(data, []byte("/Width 21\n")) {
+		t.Fatalf("embedded logo and payment qr dimensions are not both present")
+	}
+	if draws := strings.Count(inflateDrawStreams(t, data), " Do "); draws != 2 {
+		t.Fatalf("expected two image draw operators, found %d", draws)
+	}
+}
+
+func TestRenderPaymentQRIsDeterministic(t *testing.T) {
+	t.Parallel()
+	document := sampleInvoice()
+	document.PaymentQR = &invoicepdf.PaymentQR{
+		PNG:   sampleQRPNG(t, 21),
+		Label: "QR Platba",
+	}
+
+	first, err := invoicepdf.Render(document)
+	if err != nil {
+		t.Fatalf("Render(payment qr): %v", err)
+	}
+	second, err := invoicepdf.Render(document)
+	if err != nil {
+		t.Fatalf("Render(payment qr again): %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatalf("Render returned different bytes for identical payment qr input")
 	}
 }
 

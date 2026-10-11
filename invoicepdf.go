@@ -6,7 +6,10 @@
 package invoicepdf
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"image/png"
 	"strconv"
 	"strings"
 	"time"
@@ -22,11 +25,21 @@ type Document struct {
 	Number, Kind, OriginalNumber, IssuedDate, SupplyDate, OrderNumber, Locale, Currency                string
 	SellerName, SellerID, SellerAddress, SellerEmail, SellerPhone, BuyerName, BuyerAddress, BuyerEmail string
 	Logo                                                                                               []byte
+	PaymentQR                                                                                          *PaymentQR
 	Palette                                                                                            *Palette
 	Lines                                                                                              []Line
 	ItemsMinor, ShippingMinor, DiscountMinor, TotalMinor                                               int64
 	Reason                                                                                             string
 	Paid                                                                                               bool
+}
+
+// PaymentQR holds an optional payment QR image. The renderer draws the image
+// next to the totals and the payment notice. PNG holds encoded PNG bytes; the
+// qrplatba tool generates them. The renderer prints Label centered under the
+// image; an empty Label draws no caption.
+type PaymentQR struct {
+	PNG   []byte
+	Label string
 }
 
 // Line is one rendered line item. Minor amounts are in the currency minor
@@ -143,6 +156,11 @@ const (
 	totalsAmountInset = 14.0
 	totalsGap         = 14.0
 	totalsMinHeight   = 46.0
+
+	paymentQRSize            = 96.0
+	paymentQRLabelGap        = 6.0
+	paymentQRLabelSize       = 8.0
+	paymentQRLabelLineHeight = 10.5
 
 	noticeHeight      = 40.0
 	noticeGap         = 12.0
@@ -296,6 +314,13 @@ type totalRow struct {
 	value int64
 }
 
+type paymentQRLayout struct {
+	png    []byte
+	lines  []string
+	size   float64
+	height float64
+}
+
 type rowFragment struct {
 	text   string
 	size   float64
@@ -347,6 +372,9 @@ func newRenderer(document Document) *renderer {
 }
 
 func (r *renderer) render() error {
+	if err := r.validatePaymentQR(); err != nil {
+		return err
+	}
 	r.pdf.Start(gopdf.Config{
 		PageSize: gopdf.Rect{W: pageWidth, H: pageHeight},
 		Unit:     gopdf.UnitPT,
@@ -387,6 +415,19 @@ func (r *renderer) render() error {
 		return err
 	}
 	return r.drawFooters()
+}
+
+func (r *renderer) validatePaymentQR() error {
+	if r.doc.PaymentQR == nil {
+		return nil
+	}
+	if len(r.doc.PaymentQR.PNG) == 0 {
+		return errors.New("invoicepdf: payment qr: png data is empty")
+	}
+	if _, err := png.Decode(bytes.NewReader(r.doc.PaymentQR.PNG)); err != nil {
+		return fmt.Errorf("invoicepdf: payment qr: invalid png data: %w", err)
+	}
+	return nil
 }
 
 func (r *renderer) contentWidth() float64 {
@@ -1179,11 +1220,19 @@ func (r *renderer) totalLabel() string {
 
 func (r *renderer) drawTotals() error {
 	rows := r.totalRows()
+	qr, err := r.paymentQRLayout()
+	if err != nil {
+		return err
+	}
 	r.y += totalsAdvance
 	needed := float64(len(rows))*totalsRowHeight + totalsMinHeight
+	if qr != nil && qr.height > needed {
+		needed = qr.height
+	}
 	if err := r.ensureSpace(needed); err != nil {
 		return err
 	}
+	totalsY := r.y
 	if err := r.drawTotalRows(rows); err != nil {
 		return err
 	}
@@ -1221,6 +1270,64 @@ func (r *renderer) drawTotals() error {
 		return err
 	}
 	r.y += totalsBoxHeight + totalsGap
+
+	if qr == nil {
+		return nil
+	}
+	if err = r.drawPaymentQR(qr, r.left, totalsY); err != nil {
+		return err
+	}
+	if qrBottom := totalsY + qr.height + totalsGap; qrBottom > r.y {
+		r.y = qrBottom
+	}
+	return nil
+}
+
+func (r *renderer) paymentQRLayout() (*paymentQRLayout, error) {
+	qr := r.doc.PaymentQR
+	if qr == nil {
+		return nil, nil
+	}
+	size := paymentQRSize
+	layout := &paymentQRLayout{png: qr.PNG, size: size, height: size}
+	label := strings.TrimSpace(qr.Label)
+	if label == "" {
+		return layout, nil
+	}
+	lines, err := r.wrapText(label, size, false, paymentQRLabelSize)
+	if err != nil {
+		return nil, err
+	}
+	layout.lines = lines
+	layout.height += paymentQRLabelGap + float64(len(lines))*paymentQRLabelLineHeight
+	return layout, nil
+}
+
+func (r *renderer) drawPaymentQR(layout *paymentQRLayout, x, y float64) error {
+	holder, err := gopdf.ImageHolderByBytes(layout.png)
+	if err != nil {
+		return fmt.Errorf("invoicepdf: payment qr: %w", err)
+	}
+	rect := &gopdf.Rect{W: layout.size, H: layout.size}
+	if err = r.pdf.ImageByHolder(holder, x, y, rect); err != nil {
+		return fmt.Errorf("invoicepdf: draw payment qr: %w", err)
+	}
+	labelY := y + layout.size + paymentQRLabelGap
+	for _, line := range layout.lines {
+		if err = r.drawText(
+			line,
+			x,
+			labelY,
+			layout.size,
+			false,
+			paymentQRLabelSize,
+			r.palette.Muted,
+			gopdf.Center,
+		); err != nil {
+			return err
+		}
+		labelY += paymentQRLabelLineHeight
+	}
 	return nil
 }
 
