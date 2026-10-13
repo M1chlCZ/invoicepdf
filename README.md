@@ -11,6 +11,9 @@ Render invoices and credit notes as PDF bytes. The package uses embedded fonts a
 - Amounts use minor units as `int64`. Money formatting uses integer arithmetic only.
 - An optional logo, an optional color palette, and an optional payment QR image.
 - The paid or unpaid banner and the "not a VAT payer" note are part of the layout.
+- `RenderISDOC` writes the same document as deterministic ISDOC 6.0.2 XML. See [ISDOC export](#isdoc-export).
+- `LookupLabels` exposes the Czech and English label set for mailers. See [Labels](#labels).
+- A batch command renders JSON documents to PDF and ISDOC. See [Command line](#command-line).
 
 ## Install
 
@@ -122,6 +125,145 @@ document.PaymentQR = &invoicepdf.PaymentQR{
 
 The image renders 96 points wide. An empty `Label` draws no caption. `Render`
 returns an error when `PNG` is empty or not a valid PNG.
+
+## ISDOC export
+
+`RenderISDOC` returns the same document as ISDOC 6.0.2 XML in the
+`http://isdoc.cz/namespace/2013` name space. The writer is deterministic:
+equal documents return equal bytes. The standard is published at
+[isdoc.cz](https://isdoc.cz/); the output validates against the official
+`isdoc-invoice-6.0.2.xsd` schema.
+
+```go
+xmlBytes, err := invoicepdf.RenderISDOC(document)
+if err != nil {
+    return err
+}
+```
+
+`RenderISDOC` reports `ErrInvalidISDOC` for a document the format cannot hold.
+The document must carry a number, an issue date, a three-letter currency, a
+seller, a buyer and at least one line; a credit note must carry
+`OriginalNumber`.
+
+### Field mapping
+
+| Document | ISDOC | Notes |
+| --- | --- | --- |
+| `Number` | `ID` | Required. |
+| `Kind` | `DocumentType` | `KindInvoice` or an empty kind is `1`, `KindCreditNote` is `2`. Any other kind is an error. |
+| `OriginalNumber` | `OriginalDocumentReferences/OriginalDocumentReference/ID` | Required for credit notes. |
+| `IssuedDate` | `IssueDate` | ISO date or RFC 3339; written as `YYYY-MM-DD`. |
+| `SupplyDate` | - | Non-VAT documents carry no `TaxPointDate` (ISDOC rules 4.1.5 and A.5). |
+| `OrderNumber` | `OrderReferences/OrderReference/SalesOrderID` | Optional. |
+| `Locale` | `Note/@languageID` | `cs` or `en`; used on the credit-note reason. |
+| `Currency` | `LocalCurrencyCode` | Required three-letter code. `CurrRate` and `RefCurrRate` are `1`; amounts are not converted. |
+| `SellerName` | `AccountingSupplierParty/Party/PartyName/Name` | Required. |
+| `SellerID` | `AccountingSupplierParty/Party/PartyIdentification/ID` | Empty element when missing. |
+| `SellerAddress` | `AccountingSupplierParty/Party/PostalAddress` | Deterministic split; see [Addresses](#addresses). |
+| `SellerEmail`, `SellerPhone` | `AccountingSupplierParty/Party/Contact/ElectronicMail`, `.../Telephone` | `Contact` is omitted when both are empty. |
+| `BuyerName` | `AccountingCustomerParty/Party/PartyName/Name` | Required. |
+| `BuyerAddress` | `AccountingCustomerParty/Party/PostalAddress` | Same rules. The buyer ID is always an empty element; the model has none. |
+| `BuyerEmail` | `AccountingCustomerParty/Party/Contact/ElectronicMail` | |
+| `Line.Name`, `Line.Configuration` | `InvoiceLines/InvoiceLine/Item/Description` | Joined with a newline. |
+| `Line.Quantity` | `InvoicedQuantity` | No unit code; the model has no units. |
+| `Line.UnitPriceMinor` | `UnitPrice`, `UnitPriceTaxInclusive` | Equal; VAT is zero. |
+| `Line.TotalMinor` | `LineExtensionAmount`, `LineExtensionAmountTaxInclusive` | Equal; `LineExtensionTaxAmount` is `0.00`. |
+| `ItemsMinor`, `ShippingMinor`, `DiscountMinor`, `TotalMinor` | `TaxTotal`, `LegalMonetaryTotal` | Only `TotalMinor` is written. ISDOC 6.0.2 has no document-level allowance element, so shipping and discount are included in the total. |
+| `Reason` | `Note` | Credit notes only. |
+| Document identity | `UUID` | Deterministic RFC 4122 version 5 UUID from the number, kind, issue date, seller, original number and total. |
+| `Paid`, `PaymentQR`, `Logo`, `Palette` | - | Not part of ISDOC. Payment means and bank details cannot be expressed by the model. |
+
+Derived values: `IssuingSystem` is `invoicepdf`,
+`ElectronicPossibilityAgreementReference` is empty (required by the schema),
+and every amount is written with two decimal places in minor units.
+
+### Addresses
+
+`PostalAddress` needs street, building number, city, postal zone and country.
+The model stores one free-form address string, so the writer splits it
+deterministically:
+
+- Lines are trimmed; empty lines are dropped; `StreetName` joins the
+  remaining lines with `, `.
+- When the last line is `NNN NN City` or `NNN City` (for example
+  `110 00 Praha 1`), the zone and city are split off.
+- When the last line is `Street, NNN NN City` (for example
+  `Dlouhá 12, 110 00 Praha 1`), the part before the comma joins the street.
+- `BuildingNumber` stays empty; the building number remains part of
+  `StreetName`.
+- `Country` is always `CZ` and `Česká republika`; the model has no country.
+
+### Limits
+
+- The model has no VAT rates, VAT IDs or tax amounts. Every document is
+  written as a non-VAT document: `VATApplicable` is `false`, every line has a
+  zero percent tax category with `VATApplicable` `false`, and one zero-rate
+  `TaxSubTotal` reconciles the total. Multiple VAT rates are not expressible.
+- Credit notes are written with positive amounts, as ISDOC rule A.6 requires;
+  `DocumentType` `2` carries the correction. The PDF keeps the negative
+  amounts.
+- ISDOC requires at least one line, so an empty `Lines` slice is an error.
+- `PaymentMeans` is omitted because the model carries no payment details.
+
+## Labels
+
+`LookupLabels` returns the label set `Render` draws, so a mailer can reuse the
+same strings:
+
+```go
+labels, err := invoicepdf.LookupLabels(document.Locale)
+if err != nil {
+    return err
+}
+notice := labels.PaidNotice
+```
+
+A locale with the `cs` prefix selects Czech, the `en` prefix or an empty
+locale selects English. Any other locale reports `ErrUnsupportedLocale`;
+`Render` itself falls back to English for unknown locales.
+
+## Command line
+
+```
+go install github.com/m1chlcz/invoicepdf/cmd/invoicepdf@latest
+invoicepdf render --out-dir DIR [--isdoc] INPUT...
+```
+
+An `INPUT` is a JSON document file or a directory of `*.json` files.
+Directories are read in name order; an explicit list is processed in the given
+order. Every input writes `DIR/<name>.pdf` and, with `--isdoc`,
+`DIR/<name>.isdoc`. Per-file status goes to stderr. A deterministic JSON
+summary goes to stdout:
+
+```json
+{"version":1,"total":2,"succeeded":1,"failed":1,"results":[
+  {"input":"in/a.json","pdf":"out/a.pdf","isdoc":"out/a.isdoc","ok":true,"error":null},
+  {"input":"in/b.json","pdf":"","isdoc":"","ok":false,"error":"decode document: ..."}
+]}
+```
+
+Exit codes: `0` when every document renders, `1` when any document fails, `2`
+for usage errors (unknown command, missing `--out-dir`, missing input, and so
+on).
+
+The input JSON mirrors `Document`. Unknown fields are rejected so typos fail
+loudly. All fields are optional; a document that `Render` accepts still
+renders. With `--isdoc`, the stricter `RenderISDOC` rules decide the status of
+the same file.
+
+| JSON field | Type | Document field |
+| --- | --- | --- |
+| `number`, `kind`, `original_number`, `issued_date`, `supply_date`, `order_number`, `locale`, `currency` | string | `Number`, `Kind`, `OriginalNumber`, `IssuedDate`, `SupplyDate`, `OrderNumber`, `Locale`, `Currency` |
+| `seller_name`, `seller_id`, `seller_address`, `seller_email`, `seller_phone` | string | `SellerName`, `SellerID`, `SellerAddress`, `SellerEmail`, `SellerPhone` |
+| `buyer_name`, `buyer_address`, `buyer_email` | string | `BuyerName`, `BuyerAddress`, `BuyerEmail` |
+| `logo_base64` | base64 string | `Logo` (PNG or JPEG) |
+| `payment_qr` | `{"png_base64": string, "label": string}` | `PaymentQR` |
+| `palette` | `{"primary", "surface", "accent", "text", "muted", "rule", "row_alt", "white"}` as `#RRGGBB` | `Palette` |
+| `lines` | array of `{"name", "configuration", "quantity", "unit_price_minor", "total_minor"}` | `Lines` |
+| `items_minor`, `shipping_minor`, `discount_minor`, `total_minor` | integer minor units | `ItemsMinor`, `ShippingMinor`, `DiscountMinor`, `TotalMinor` |
+| `reason` | string | `Reason` |
+| `paid` | bool | `Paid` |
 
 ## Development
 

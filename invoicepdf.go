@@ -217,90 +217,110 @@ func defaultPalette() Palette {
 	}
 }
 
-type labels struct {
-	invoiceTitle    string
-	creditNoteTitle string
-	originalNumber  string
-	issuedDate      string
-	supplyDate      string
-	orderNumber     string
-	seller          string
-	buyer           string
-	sellerID        string
-	description     string
-	quantity        string
-	unitPrice       string
-	lineTotal       string
-	itemsTotal      string
-	shipping        string
-	discount        string
-	totalDue        string
-	totalSettled    string
-	paidNotice      string
-	unpaid          string
-	reason          string
-	notVATPayer     string
-	continued       string
-	page            string
-	emptyItems      string
+// Labels is the localized label set the renderer draws. A mailer can reuse
+// the same strings through LookupLabels so notices match the PDF.
+type Labels struct {
+	InvoiceTitle    string
+	CreditNoteTitle string
+	OriginalNumber  string
+	IssuedDate      string
+	SupplyDate      string
+	OrderNumber     string
+	Seller          string
+	Buyer           string
+	SellerID        string
+	Description     string
+	Quantity        string
+	UnitPrice       string
+	LineTotal       string
+	ItemsTotal      string
+	Shipping        string
+	Discount        string
+	TotalDue        string
+	TotalSettled    string
+	PaidNotice      string
+	Unpaid          string
+	Reason          string
+	NotVATPayer     string
+	Continued       string
+	Page            string
+	EmptyItems      string
 }
 
-func labelsFor(czech bool) labels {
+// ErrUnsupportedLocale reports a locale that is neither Czech nor English.
+var ErrUnsupportedLocale = errors.New("invoicepdf: unsupported locale")
+
+// LookupLabels returns the label set Render uses for the locale. A locale
+// with the cs prefix selects Czech, the en prefix or an empty locale selects
+// English. Any other locale reports ErrUnsupportedLocale.
+func LookupLabels(locale string) (Labels, error) {
+	normalized := strings.ToLower(strings.TrimSpace(locale))
+	switch {
+	case normalized == "", strings.HasPrefix(normalized, "en"):
+		return labelsFor(false), nil
+	case strings.HasPrefix(normalized, "cs"):
+		return labelsFor(true), nil
+	default:
+		return Labels{}, fmt.Errorf("%w: %q", ErrUnsupportedLocale, locale)
+	}
+}
+
+func labelsFor(czech bool) Labels {
 	if czech {
-		return labels{ //nolint:gosec // Localized UI label text, not hardcoded credentials.
-			invoiceTitle:    "Faktura",
-			creditNoteTitle: "Opravný doklad",
-			originalNumber:  "Původní doklad",
-			issuedDate:      "Datum vystavení",
-			supplyDate:      "Datum dodání",
-			orderNumber:     "Číslo objednávky",
-			seller:          "Prodávající",
-			buyer:           "Odběratel",
-			sellerID:        "IČO",
-			description:     "Popis",
-			quantity:        "Množství",
-			unitPrice:       "Cena za jednotku",
-			lineTotal:       labelTotalCS,
-			itemsTotal:      "Položky celkem",
-			shipping:        labelShippingCS,
-			discount:        "Sleva",
-			totalDue:        "Celkem k úhradě",
-			totalSettled:    labelTotalCS,
-			paidNotice:      "Neplaťte — již uhrazeno.",
-			unpaid:          "Nezaplaceno",
-			reason:          "Důvod opravy",
-			notVATPayer:     "Prodávající není plátcem DPH.",
-			continued:       "pokračování",
-			page:            "Strana",
-			emptyItems:      "Bez položek",
+		return Labels{ //nolint:gosec // Localized UI label text, not hardcoded credentials.
+			InvoiceTitle:    "Faktura",
+			CreditNoteTitle: "Opravný doklad",
+			OriginalNumber:  "Původní doklad",
+			IssuedDate:      "Datum vystavení",
+			SupplyDate:      "Datum dodání",
+			OrderNumber:     "Číslo objednávky",
+			Seller:          "Prodávající",
+			Buyer:           "Odběratel",
+			SellerID:        "IČO",
+			Description:     "Popis",
+			Quantity:        "Množství",
+			UnitPrice:       "Cena za jednotku",
+			LineTotal:       labelTotalCS,
+			ItemsTotal:      "Položky celkem",
+			Shipping:        labelShippingCS,
+			Discount:        "Sleva",
+			TotalDue:        "Celkem k úhradě",
+			TotalSettled:    labelTotalCS,
+			PaidNotice:      "Neplaťte — již uhrazeno.",
+			Unpaid:          "Nezaplaceno",
+			Reason:          "Důvod opravy",
+			NotVATPayer:     "Prodávající není plátcem DPH.",
+			Continued:       "pokračování",
+			Page:            "Strana",
+			EmptyItems:      "Bez položek",
 		}
 	}
-	return labels{
-		invoiceTitle:    "Invoice",
-		creditNoteTitle: "Credit note",
-		originalNumber:  "Original document",
-		issuedDate:      "Issue date",
-		supplyDate:      "Supply date",
-		orderNumber:     "Order number",
-		seller:          "Seller",
-		buyer:           "Buyer",
-		sellerID:        "Company ID",
-		description:     "Description",
-		quantity:        "Qty",
-		unitPrice:       "Unit price",
-		lineTotal:       labelTotalEN,
-		itemsTotal:      "Items total",
-		shipping:        labelShippingEN,
-		discount:        "Discount",
-		totalDue:        "Total due",
-		totalSettled:    labelTotalEN,
-		paidNotice:      "Already paid — do not pay again.",
-		unpaid:          "Unpaid",
-		reason:          "Reason for correction",
-		notVATPayer:     "The seller is not a VAT payer.",
-		continued:       "continued",
-		page:            "Page",
-		emptyItems:      "No items",
+	return Labels{
+		InvoiceTitle:    "Invoice",
+		CreditNoteTitle: "Credit note",
+		OriginalNumber:  "Original document",
+		IssuedDate:      "Issue date",
+		SupplyDate:      "Supply date",
+		OrderNumber:     "Order number",
+		Seller:          "Seller",
+		Buyer:           "Buyer",
+		SellerID:        "Company ID",
+		Description:     "Description",
+		Quantity:        "Qty",
+		UnitPrice:       "Unit price",
+		LineTotal:       labelTotalEN,
+		ItemsTotal:      "Items total",
+		Shipping:        labelShippingEN,
+		Discount:        "Discount",
+		TotalDue:        "Total due",
+		TotalSettled:    labelTotalEN,
+		PaidNotice:      "Already paid — do not pay again.",
+		Unpaid:          "Unpaid",
+		Reason:          "Reason for correction",
+		NotVATPayer:     "The seller is not a VAT payer.",
+		Continued:       "continued",
+		Page:            "Page",
+		EmptyItems:      "No items",
 	}
 }
 
@@ -331,7 +351,7 @@ type rowFragment struct {
 type renderer struct {
 	pdf     gopdf.GoPdf
 	doc     Document
-	labels  labels
+	labels  Labels
 	palette Palette
 	czech   bool
 
@@ -440,9 +460,9 @@ func (r *renderer) isCreditNote() bool {
 
 func (r *renderer) documentTitle() string {
 	if r.isCreditNote() {
-		return r.labels.creditNoteTitle
+		return r.labels.CreditNoteTitle
 	}
-	return r.labels.invoiceTitle
+	return r.labels.InvoiceTitle
 }
 
 func (r *renderer) setFillColor(color Color) {
@@ -643,7 +663,7 @@ func (r *renderer) drawContinuationHeader() error {
 	if number := strings.TrimSpace(r.doc.Number); number != "" {
 		caption += " " + number
 	}
-	caption += " · " + r.labels.continued
+	caption += " · " + r.labels.Continued
 	if err := r.drawText(
 		caption,
 		r.left,
@@ -719,7 +739,7 @@ func (r *renderer) drawWrappedLines(
 
 func (r *renderer) drawParties() error {
 	if err := r.drawPartySection(
-		r.labels.seller,
+		r.labels.Seller,
 		r.doc.SellerName,
 		r.doc.SellerAddress,
 		r.doc.SellerEmail,
@@ -730,7 +750,7 @@ func (r *renderer) drawParties() error {
 	}
 	r.y += partySectionGap
 	return r.drawPartySection(
-		r.labels.buyer,
+		r.labels.Buyer,
 		r.doc.BuyerName,
 		r.doc.BuyerAddress,
 		r.doc.BuyerEmail,
@@ -768,7 +788,7 @@ func (r *renderer) drawPartySection(heading, name, address, email, phone, id str
 	}
 	if trimmed := strings.TrimSpace(id); trimmed != "" {
 		if err := r.drawWrappedValue(
-			r.labels.sellerID+": "+trimmed,
+			r.labels.SellerID+": "+trimmed,
 			false,
 			partyMetaSize,
 			partyMetaLineHeight,
@@ -788,17 +808,17 @@ func (r *renderer) drawPartySection(heading, name, address, email, phone, id str
 func (r *renderer) drawMetaBand() error {
 	var items []metaItem
 	if value := formatDate(r.doc.IssuedDate, r.czech); value != "" {
-		items = append(items, metaItem{r.labels.issuedDate, value})
+		items = append(items, metaItem{r.labels.IssuedDate, value})
 	}
 	if value := formatDate(r.doc.SupplyDate, r.czech); value != "" {
-		items = append(items, metaItem{r.labels.supplyDate, value})
+		items = append(items, metaItem{r.labels.SupplyDate, value})
 	}
 	if order := strings.TrimSpace(r.doc.OrderNumber); order != "" {
-		items = append(items, metaItem{r.labels.orderNumber, order})
+		items = append(items, metaItem{r.labels.OrderNumber, order})
 	}
 	if r.isCreditNote() {
 		if original := strings.TrimSpace(r.doc.OriginalNumber); original != "" {
-			items = append(items, metaItem{r.labels.originalNumber, original})
+			items = append(items, metaItem{r.labels.OriginalNumber, original})
 		}
 	}
 	if len(items) == 0 {
@@ -886,20 +906,20 @@ func (r *renderer) drawTableHeader(layout tableLayout) error {
 	top := r.y + tableHeaderTextY
 	headers := []tableHeader{
 		{
-			text:  r.labels.description,
+			text:  r.labels.Description,
 			x:     layout.descX + tableDescInset,
 			width: layout.descW - 2*tableDescInset,
 			align: gopdf.Left,
 		},
-		{text: r.labels.quantity, x: layout.qtyX, width: layout.qtyW - tableNumInset, align: gopdf.Right},
+		{text: r.labels.Quantity, x: layout.qtyX, width: layout.qtyW - tableNumInset, align: gopdf.Right},
 		{
-			text:  r.moneyHeader(r.labels.unitPrice),
+			text:  r.moneyHeader(r.labels.UnitPrice),
 			x:     layout.unitX,
 			width: layout.unitW - tableNumInset,
 			align: gopdf.Right,
 		},
 		{
-			text:  r.moneyHeader(r.labels.lineTotal),
+			text:  r.moneyHeader(r.labels.LineTotal),
 			x:     layout.totalX,
 			width: layout.totalW - tableNumInset,
 			align: gopdf.Right,
@@ -957,7 +977,7 @@ func (r *renderer) drawEmptyItemsRow(layout tableLayout) error {
 		}
 	}
 	if err := r.drawText(
-		r.labels.emptyItems,
+		r.labels.EmptyItems,
 		layout.descX+tableDescInset,
 		r.y+tableDescInset,
 		layout.descW-2*tableDescInset,
@@ -1213,9 +1233,9 @@ func (r *renderer) startContinuationPage(layout tableLayout) error {
 
 func (r *renderer) totalLabel() string {
 	if r.isCreditNote() || r.doc.Paid {
-		return r.labels.totalSettled
+		return r.labels.TotalSettled
 	}
-	return r.labels.totalDue
+	return r.labels.TotalDue
 }
 
 func (r *renderer) drawTotals() error {
@@ -1332,12 +1352,12 @@ func (r *renderer) drawPaymentQR(layout *paymentQRLayout, x, y float64) error {
 }
 
 func (r *renderer) totalRows() []totalRow {
-	rows := []totalRow{{r.labels.itemsTotal, r.doc.ItemsMinor}}
+	rows := []totalRow{{r.labels.ItemsTotal, r.doc.ItemsMinor}}
 	if r.doc.ShippingMinor != 0 {
-		rows = append(rows, totalRow{r.labels.shipping, r.doc.ShippingMinor})
+		rows = append(rows, totalRow{r.labels.Shipping, r.doc.ShippingMinor})
 	}
 	if r.doc.DiscountMinor != 0 {
-		rows = append(rows, totalRow{r.labels.discount, r.doc.DiscountMinor})
+		rows = append(rows, totalRow{r.labels.Discount, r.doc.DiscountMinor})
 	}
 	return rows
 }
@@ -1407,9 +1427,9 @@ func (r *renderer) drawPaymentNotice() error {
 
 func (r *renderer) paymentNoticeStyle() (string, Color, Color) {
 	if r.doc.Paid {
-		return r.labels.paidNotice, r.palette.Primary, r.palette.Surface
+		return r.labels.PaidNotice, r.palette.Primary, r.palette.Surface
 	}
-	return r.labels.unpaid, r.palette.Accent, r.palette.White
+	return r.labels.Unpaid, r.palette.Accent, r.palette.White
 }
 
 func (r *renderer) drawNotes() error {
@@ -1438,7 +1458,7 @@ func (r *renderer) drawReasonHeading() error {
 		return err
 	}
 	if err := r.drawText(
-		r.labels.reason,
+		r.labels.Reason,
 		r.left,
 		r.y,
 		r.contentWidth(),
@@ -1476,7 +1496,7 @@ func (r *renderer) drawTaxNote() error {
 		return err
 	}
 	return r.drawText(
-		r.labels.notVATPayer,
+		r.labels.NotVATPayer,
 		r.left,
 		r.y+taxNoteY,
 		r.contentWidth(),
@@ -1500,7 +1520,7 @@ func (r *renderer) drawFooters() error {
 		r.setStrokeColor(r.palette.Rule)
 		r.pdf.SetLineWidth(footerRuleWidth)
 		r.pdf.Line(r.left, footerY, r.right, footerY)
-		pageLabel := fmt.Sprintf(pageCountFormat, r.labels.page, page, total)
+		pageLabel := fmt.Sprintf(pageCountFormat, r.labels.Page, page, total)
 		if err := r.drawText(
 			pageLabel,
 			r.left,
